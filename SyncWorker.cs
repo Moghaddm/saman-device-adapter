@@ -217,14 +217,19 @@ namespace SamanDeviceAdapter
 
         /// <summary>
         /// Pushes attendance records to the HRM API.
+        /// API Endpoint: POST {HrmApiBaseUrl}/api/attendance/importAttendance/{companyId}
+        /// Payload: { "records": [...] }
         /// </summary>
         private bool PushToHrmApi(List<AttendanceRecord> records, Settings settings)
         {
             try
             {
+                // Build the API URL with company ID in the path (as per old implementation)
+                string url = Constants.HrmApiBaseUrl + Constants.AttendanceImportEndpoint + "/" + settings.CompanyId;
+
+                // Payload structure matches old implementation: { "records": [...] }
                 var payload = new
                 {
-                    companyId = settings.CompanyId,
                     records = records.Select(r => new
                     {
                         employeeId = r.EmployeeId,
@@ -235,17 +240,33 @@ namespace SamanDeviceAdapter
                 };
 
                 string json = JsonConvert.SerializeObject(payload);
+                ServiceLogger.LogInfo("SyncWorker", $"Sending {records.Count} records to: {url}");
+
                 var content = new StringContent(json, System.Text.Encoding.UTF8, "application/json");
-
-                string url = Constants.HrmApiBaseUrl + Constants.AttendanceImportEndpoint;
-                var response = _httpClient.PostAsync(url, content).Result;
-
-                if (response.IsSuccessStatusCode)
+                
+                // Create request with explicit headers (matching old implementation)
+                var request = new HttpRequestMessage(HttpMethod.Post, url)
                 {
+                    Content = content
+                };
+                request.Headers.Add("Accept", "application/json");
+
+                var response = _httpClient.SendAsync(request).Result;
+
+                // Check for successful status codes: 200, 201, 202 (as per old implementation)
+                if (response.StatusCode == System.Net.HttpStatusCode.OK ||
+                    response.StatusCode == System.Net.HttpStatusCode.Created ||
+                    response.StatusCode == (System.Net.HttpStatusCode)202)
+                {
+                    ServiceLogger.LogInfo("SyncWorker", $"API returned success: {(int)response.StatusCode}");
                     return true;
                 }
 
-                ServiceLogger.LogWarning("SyncWorker", $"HRM API returned status {response.StatusCode}");
+                // Log failure details
+                string responseContent = response.Content.ReadAsStringAsync().Result;
+                ServiceLogger.LogWarning("SyncWorker", 
+                    $"HRM API returned error status {(int)response.StatusCode}. Response: {responseContent}");
+                
                 return false;
             }
             catch (Exception ex)
